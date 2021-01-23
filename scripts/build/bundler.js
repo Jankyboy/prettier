@@ -1,7 +1,7 @@
 "use strict";
 
 const path = require("path");
-const execa = require("execa");
+const fs = require("fs");
 const { rollup } = require("rollup");
 const webpack = require("webpack");
 const { nodeResolve } = require("@rollup/plugin-node-resolve");
@@ -17,7 +17,7 @@ const executable = require("./rollup-plugins/executable");
 const evaluate = require("./rollup-plugins/evaluate");
 const externals = require("./rollup-plugins/externals");
 
-const PROJECT_ROOT = path.resolve(__dirname, "../..");
+const PROJECT_ROOT = path.join(__dirname, "../..");
 
 const EXTERNALS = [
   "assert",
@@ -47,21 +47,39 @@ const entries = [
     find: "lines-and-columns",
     replacement: require.resolve("lines-and-columns"),
   },
-  // `handlebars` causes webpack warning by using `require.extensions`
-  // `dist/handlebars.js` also complaint on `window` variable
-  // use cjs build instead
-  // https://github.com/prettier/prettier/issues/6656
-  {
-    find: "handlebars",
-    replacement: require.resolve("handlebars/dist/cjs/handlebars.js"),
-  },
   {
     find: "@angular/compiler/src",
     replacement: path.resolve(
       `${PROJECT_ROOT}/node_modules/@angular/compiler/esm2015/src`
     ),
   },
+  // Avoid rollup `SOURCEMAP_ERROR` and `THIS_IS_UNDEFINED` error
+  {
+    find: "@glimmer/syntax",
+    replacement: require.resolve("@glimmer/syntax"),
+  },
 ];
+
+function webpackNativeShims(config, modules) {
+  if (!config.resolve) {
+    config.resolve = {};
+  }
+  const { resolve } = config;
+  resolve.alias = resolve.alias || {};
+  resolve.fallback = resolve.fallback || {};
+  for (const module of modules) {
+    if (module in resolve.alias || module in resolve.fallback) {
+      throw new Error(`fallback/alias for "${module}" already exists.`);
+    }
+    const file = path.join(__dirname, `shims/${module}.mjs`);
+    if (fs.existsSync(file)) {
+      resolve.alias[module] = file;
+    } else {
+      resolve.fallback[module] = false;
+    }
+  }
+  return config;
+}
 
 function getBabelConfig(bundle) {
   const config = {
@@ -178,6 +196,7 @@ function getRollupConfig(bundle) {
         bundle.type === "plugin"
           ? undefined
           : (id) => /\.\/parser-.*?/.test(id),
+      requireReturnsDefault: "preferred",
     }),
     externals(bundle.externals),
     bundle.target === "universal" && nodeGlobals(),
@@ -198,7 +217,7 @@ function getRollupConfig(bundle) {
   return config;
 }
 
-function getRollupOutputOptions(bundle) {
+function getRollupOutputOptions(bundle, buildOptions) {
   const options = {
     // Avoid warning form #8797
     exports: "auto",
@@ -217,14 +236,18 @@ function getRollupOutputOptions(bundle) {
           ...options,
           format: "umd",
         },
-        {
+        !buildOptions.playground && {
           ...options,
           format: "esm",
           file: `dist/esm/${bundle.output.replace(".js", ".mjs")}`,
         },
-      ];
+      ].filter(Boolean);
     }
     options.format = bundle.format;
+  }
+
+  if (buildOptions.playground && bundle.bundler !== "webpack") {
+    return { skipped: true };
   }
   return [options];
 }
@@ -236,6 +259,8 @@ function getWebpackConfig(bundle) {
 
   const root = path.resolve(__dirname, "..", "..");
   const config = {
+    mode: "production",
+    performance: { hints: false },
     entry: path.resolve(root, bundle.input),
     module: {
       rules: [
@@ -251,69 +276,74 @@ function getWebpackConfig(bundle) {
     output: {
       path: path.resolve(root, "dist"),
       filename: bundle.output,
-      library: ["prettierPlugins", bundle.name],
-      libraryTarget: "umd",
+      library: {
+        type: "umd",
+        name: ["prettierPlugins", bundle.name],
+      },
       // https://github.com/webpack/webpack/issues/6642
       globalObject: 'new Function("return this")()',
+    },
+    optimization: {},
+    resolve: {
+      // Webpack@5 can't resolve "postcss/lib/parser" and "postcss/lib/stringifier"" imported by `postcss-scss`
+      // Ignore `exports` field to fix bundle script
+      exportsFields: [],
     },
   };
 
   if (bundle.terserOptions) {
     const TerserPlugin = require("terser-webpack-plugin");
-
-    config.optimization = {
-      minimizer: [new TerserPlugin(bundle.terserOptions)],
-    };
+    config.optimization.minimizer = [new TerserPlugin(bundle.terserOptions)];
   }
+  // config.optimization.minimize = false;
 
-  return config;
+  return webpackNativeShims(config, ["os", "path", "util", "url", "fs"]);
 }
 
 function runWebpack(config) {
   return new Promise((resolve, reject) => {
-    webpack(config, (err) => {
-      if (err) {
-        reject(err);
-      } else {
-        resolve();
+    webpack(config, (error, stats) => {
+      if (error) {
+        reject(error);
+        return;
       }
+
+      if (stats.hasErrors()) {
+        const { errors } = stats.toJson();
+        const error = new Error(errors[0].message);
+        error.errors = errors;
+        reject(error);
+        return;
+      }
+
+      if (stats.hasWarnings()) {
+        const { warnings } = stats.toJson();
+        console.warn(warnings);
+      }
+
+      resolve();
     });
   });
 }
 
-async function checkCache(cache, inputOptions, outputOption) {
-  const useCache = await cache.checkBundle(
-    outputOption.file,
-    inputOptions,
-    outputOption
-  );
+module.exports = async function createBundle(bundle, cache, options) {
+  const inputOptions = getRollupConfig(bundle);
+  const outputOptions = getRollupOutputOptions(bundle, options);
 
-  if (useCache) {
-    try {
-      await execa("cp", [
-        path.join(cache.cacheDir, outputOption.file.replace("dist", "files")),
-        outputOption.file,
-      ]);
-      return true;
-    } catch (err) {
-      console.log(err);
-      // Proceed to build
-    }
+  if (!Array.isArray(outputOptions) && outputOptions.skipped) {
+    return { skipped: true };
   }
 
-  return false;
-}
-
-module.exports = async function createBundle(bundle, cache) {
-  const inputOptions = getRollupConfig(bundle);
-  const outputOptions = getRollupOutputOptions(bundle);
-
-  const checkCacheResults = await Promise.all(
-    outputOptions.map((outputOption) =>
-      checkCache(cache, inputOptions, outputOption)
-    )
-  );
-  if (checkCacheResults.every((r) => r === true)) {
+  if (
+    !options["purge-cache"] &&
+    (
+      await Promise.all(
+        outputOptions.map((outputOption) =>
+          cache.isCached(inputOptions, outputOption)
+        )
+      )
+    ).every((cached) => cached)
+  ) {
     return { cached: true };
   }
 

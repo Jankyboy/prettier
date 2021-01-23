@@ -23,8 +23,15 @@ if (isProduction) {
         presets: [
           [
             "@babel/env",
-            // Workaround for https://github.com/babel/babel/issues/11994
-            { loose: true },
+            {
+              targets: { node: "current" },
+              exclude: [
+                "transform-async-to-generator",
+                "transform-classes",
+                "proposal-async-generator-functions",
+                "transform-regenerator",
+              ],
+            },
           ],
         ],
       },
@@ -47,18 +54,20 @@ module.exports = {
   testPathIgnorePatterns,
   collectCoverage: ENABLE_CODE_COVERAGE,
   collectCoverageFrom: ["<rootDir>/src/**/*.js", "<rootDir>/bin/**/*.js"],
-  coveragePathIgnorePatterns: ["<rootDir>/src/document/doc-debug.js"],
+  coveragePathIgnorePatterns: [
+    "<rootDir>/src/standalone.js",
+    "<rootDir>/src/document/doc-debug.js",
+  ],
   coverageReporters: ["text", "lcov"],
   moduleNameMapper: {
-    "prettier/local": "<rootDir>/tests_config/require_prettier.js",
-    "prettier/standalone": "<rootDir>/tests_config/require_standalone.js",
+    "prettier-local": "<rootDir>/tests_config/require_prettier.js",
+    "prettier-standalone": "<rootDir>/tests_config/require_standalone.js",
   },
-  modulePathIgnorePatterns: ["<rootDir>/dist"],
+  modulePathIgnorePatterns: ["<rootDir>/dist", "<rootDir>/website/static/lib"],
   testEnvironment: "node",
   transform,
   watchPlugins: [
     "jest-watch-typeahead/filename",
     "jest-watch-typeahead/testname",
   ],
-  verbose: Boolean(process.env.FULL_TEST),
 };

@@ -13,10 +13,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v2.3.2
+        uses: actions/checkout@v2.3.4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v2.1.1
+        uses: actions/setup-node@v2.1.4
 
       - name: Install Dependencies
         run: yarn install --frozen-lockfile
@@ -46,7 +46,7 @@ jobs:
       # The cache step might saving the result of master branch, need investigate
       - name: Check Sizes
         if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'dependabot/npm_and_yarn/')
-        uses: preactjs/compressed-size-action@v2.0.1
+        uses: preactjs/compressed-size-action@2.1.0
         with:
           repo-token: "${{ secrets.GITHUB_TOKEN }}"
           compression: none
@@ -57,10 +57,10 @@ jobs:
     needs: [build]
     steps:
       - name: Checkout
-        uses: actions/checkout@v2.3.2
+        uses: actions/checkout@v2.3.4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v2.1.1
+        uses: actions/setup-node@v2.1.4
 
       - name: Install Dependencies
         run: yarn install --frozen-lockfile
@@ -75,7 +75,7 @@ jobs:
         run: yarn lint:dist
 
   test:
-    timeout-minutes: 60
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -91,6 +91,8 @@ jobs:
           - os: "ubuntu-latest"
             node: "14"
             FULL_TEST: true
+          - os: "ubuntu-latest"
+            node: "15"
         exclude:
           - os: "macos-latest"
             node: "12"
@@ -103,10 +105,10 @@ jobs:
     needs: [build]
     steps:
       - name: Checkout
-        uses: actions/checkout@v2.3.2
+        uses: actions/checkout@v2.3.4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v2.1.1
+        uses: actions/setup-node@v2.1.4
         with:
           node-version: ${{ matrix.node }}
 
